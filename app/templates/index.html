@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Receipt Information Extractor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .upload-section {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: all 0.3s;
+        }
+        .upload-section:hover {
+            border-color: #0077ff;
+        }
+        #file-input {
+            display: none;
+        }
+        .btn {
+            background-color: #0077ff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .btn:hover {
+            background-color: #0055cc;
+        }
+        .btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #preview {
+            max-width: 100%;
+            max-height: 300px;
+            display: none;
+            margin: 20px auto;
+            border: 1px solid #ddd;
+        }
+        #result-container {
+            background-color: #f5f5f5;
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #0077ff;
+            animation: spin 1s linear infinite;
+            display: none;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .info-card {
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+        .info-item {
+            margin-bottom: 10px;
+        }
+        .info-label {
+            font-weight: bold;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <h1>Receipt Information Extractor</h1>
+    <p>Upload a receipt image to extract seller details using VLM</p>
+    
+    <div class="container">
+        <div class="upload-section" id="drop-area">
+            <p>Drag and drop your receipt image here, or click to select a file</p>
+            <input type="file" id="file-input" accept=".jpg,.jpeg,.png">
+        </div>
+        
+        <img id="preview" alt="Receipt preview">
+        
+        <div style="text-align: center;">
+            <button id="submit-btn" class="btn" disabled>Extract Information</button>
+        </div>
+        
+        <div class="spinner" id="loading-spinner"></div>
+        
+        <div id="result-container">
+            <h2>Extracted Information</h2>
+            <div id="json-display"></div>
+            <div id="info-display" class="info-card"></div>
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const dropArea = document.getElementById('drop-area');
+        const fileInput = document.getElementById('file-input');
+        const preview = document.getElementById('preview');
+        const submitBtn = document.getElementById('submit-btn');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const resultContainer = document.getElementById('result-container');
+        const jsonDisplay = document.getElementById('json-display');
+        const infoDisplay = document.getElementById('info-display');
+        
+        // Event listeners for drag and drop
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+        });
+        
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        dropArea.addEventListener('drop', handleDrop, false);
+        dropArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', handleFile);
+        submitBtn.addEventListener('click', uploadFile);
+        
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+        
+        function handleFile(e) {
+            const files = this.files;
+            handleFiles(files);
+        }
+        
+        function handleFiles(files) {
+            if (files.length) {
+                const file = files[0];
+                if (!file.type.match('image.*')) {
+                    alert('Please upload an image file');
+                    return;
+                }
+                
+                preview.file = file;
+                submitBtn.disabled = false;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+        
+        function uploadFile() {
+            const file = fileInput.files[0] || preview.file;
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            submitBtn.disabled = true;
+            loadingSpinner.style.display = 'block';
+            resultContainer.style.display = 'none';
+            
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                displayResults(data);
+                submitBtn.disabled = false;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error uploading file: ' + error.message);
+                submitBtn.disabled = false;
+            })
+            .finally(() => {
+                loadingSpinner.style.display = 'none';
+            });
+        }
+        
+        function displayResults(data) {
+            resultContainer.style.display = 'block';
+            
+            // Try to parse the extraction result as JSON
+            let parsedInfo = data.extraction_result;
+            try {
+                // Check if the response is already a string representation of JSON
+                if (typeof data.extraction_result === 'string') {
+                    parsedInfo = JSON.parse(data.extraction_result);
+                }
+            } catch (e) {
+                console.log('Not a valid JSON string, using as text');
+            }
+            
+            // Clear previous results
+            infoDisplay.innerHTML = '';
+            
+            // Build a nice display of the information
+            if (typeof parsedInfo === 'object') {
+                for (const [key, value] of Object.entries(parsedInfo)) {
+                    if (value) {
+                        const infoItem = document.createElement('div');
+                        infoItem.className = 'info-item';
+                        
+                        const label = document.createElement('div');
+                        label.className = 'info-label';
+                        label.textContent = key.replace(/([A-Z])/g, ' $1')
+                            .replace(/_/g, ' ')
+                            .split(' ')
+                            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                            .join(' ') + ':';
+                        
+                        const content = document.createElement('div');
+                        content.textContent = value;
+                        
+                        infoItem.appendChild(label);
+                        infoItem.appendChild(content);
+                        infoDisplay.appendChild(infoItem);
+                    }
+                }
+            } else {
+                infoDisplay.innerHTML = `<pre>${data.extraction_result}</pre>`;
+            }
+        }
+    </script>
+</body>
+</html> 
